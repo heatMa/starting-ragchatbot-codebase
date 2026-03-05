@@ -14,64 +14,34 @@ jobs:
       issues: write
       pull-requests: write
     steps:
-      - name: Respond with Claude
+      - name: Call Claude API
+        id: claude
+        run: |
+          PROMPT='${{ github.event.comment.body || github.event.issue.body }}'
+
+          RESPONSE=$(curl -s -X POST https://api.anthropic.com/v1/messages \
+            -H "Content-Type: application/json" \
+            -H "x-api-key: ${{ secrets.ANTHROPIC_API_KEY }}" \
+            -H "anthropic-version: 2023-06-01" \
+            -d "{
+              \"model\": \"claude-3-5-sonnet-20241022\",
+              \"max_tokens\": 1024,
+              \"messages\": [{\"role\": \"user\", \"content\": \"$PROMPT\"}]
+            }")
+
+          echo "response=$RESPONSE" >> $GITHUB_OUTPUT
+          echo "API Response: $RESPONSE"
+
+      - name: Post response as comment
         uses: actions/github-script@v7
         with:
           script: |
-            const https = require('https');
-
-            const prompt = context.payload.comment?.body || context.payload.issue?.body;
-            const issueNumber = context.payload.issue?.number || context.payload.issue?.number;
-
-            // Make API call to Anthropic
-            const postData = JSON.stringify({
-              model: 'claude-3-sonnet-20240229',
-              max_tokens: 1024,
-              messages: [{ role: 'user', content: prompt }]
-            });
-
-            const options = {
-              hostname: 'api.anthropic.com',
-              path: '/v1/messages',
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'x-api-key': '${{ secrets.ANTHROPIC_API_KEY }}',
-                'anthropic-version': '2023-06-01',
-                'Content-Length': Buffer.byteLength(postData)
-              }
-            };
-
-            let reply = '';
-
-            await new Promise((resolve, reject) => {
-              const req = https.request(options, (res) => {
-                let data = '';
-                res.on('data', (chunk) => { data += chunk; });
-                res.on('end', () => {
-                  try {
-                    const response = JSON.parse(data);
-                    reply = response.content?.[0]?.text || 'Sorry, I could not process your request.';
-                    resolve();
-                  } catch (e) {
-                    reply = 'Error parsing response: ' + data;
-                    resolve();
-                  }
-                });
-              });
-
-              req.on('error', (e) => {
-                reply = 'Error: ' + e.message;
-                resolve();
-              });
-
-              req.write(postData);
-              req.end();
-            });
+            const response = JSON.parse('${{ steps.claude.outputs.response }}');
+            const reply = response.content?.[0]?.text || 'Sorry, I could not process your request. Error: ' + JSON.stringify(response);
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: issueNumber,
+              issue_number: context.payload.issue?.number || context.payload.issue?.number,
               body: reply
             });
